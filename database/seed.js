@@ -1,4 +1,4 @@
-const db = require('./connection');
+import db from './connection.js';
 
 db.serialize(() => {
     console.log("Setting up database tables...");
@@ -13,7 +13,6 @@ db.serialize(() => {
         role VARCHAR
     )`);
 
-    // Insert sample login users (Engineer, Finance, Leadership)
     db.run(`INSERT INTO users VALUES 
         ('usr-1', 'engineer@cloud.com', 'password123', 'Alex (DevOps)', 'engineer'),
         ('usr-2', 'finance@cloud.com', 'password123', 'Sarah (Finance)', 'finance'),
@@ -62,7 +61,6 @@ db.serialize(() => {
 
     console.log("Tables created successfully. Seeding data...");
 
-    // Seed 100 Inventory items (VMs, volumes, IPs)
     const regions = ['Noida', 'Bangalore', 'Mumbai'];
     const environments = ['prod', 'staging', 'dev'];
     const teams = ['Core-Eng', 'Payments', 'Analytics', 'Growth', 'Infra'];
@@ -85,7 +83,6 @@ db.serialize(() => {
 
         invStmt.run(id, name, type, region, env, owner, vcpu, ram, disk, cost, '2025-10-01');
 
-        // Generate sample recommendations for underutilized or idle resources
         if (i % 3 === 0 && type === 'VM') {
             recStmt.run(
                 `rec-${i}`,

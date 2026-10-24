@@ -1,4 +1,4 @@
-import db from './connection.js';
+import db, { importGeneratedData } from './connection.js';
 
 db.serialize(() => {
     console.log("Setting up database tables...");
@@ -119,8 +119,32 @@ db.serialize(() => {
         }
     }
 
-    invStmt.finalize();
-    recStmt.finalize();
-
-    console.log("Database seeding completed successfully!");
+    invStmt.finalize((inventoryError) => {
+        if (inventoryError) {
+            console.error("Inventory seed finalization failed:", inventoryError);
+            process.exitCode = 1;
+            db.close();
+            return;
+        }
+        recStmt.finalize(async (recommendationError) => {
+            if (recommendationError) {
+                console.error("Recommendation seed finalization failed:", recommendationError);
+                process.exitCode = 1;
+                db.close();
+                return;
+            }
+            try {
+                const result = await importGeneratedData({ force: true });
+                console.log(
+                    `Imported simulator data: ${result.resourceCount} resources and ${result.metricCount} metrics.`,
+                );
+                console.log("Database seeding completed successfully!");
+            } catch (error) {
+                console.error("Generated data import failed:", error);
+                process.exitCode = 1;
+            } finally {
+                db.close();
+            }
+        });
+    });
 });

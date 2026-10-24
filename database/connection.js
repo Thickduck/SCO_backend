@@ -337,6 +337,14 @@ export async function initializeDatabase() {
             ('usr-2', 'finance@cloud.com', 'password123', 'Sarah (Finance)', 'finance', FALSE),
             ('usr-3', 'admin@cloud.com', 'password123', 'Leadership', 'leadership', TRUE)`);
     }
+    await run(`CREATE TABLE IF NOT EXISTS company_settings (
+        company_id VARCHAR PRIMARY KEY,
+        name VARCHAR NOT NULL,
+        website VARCHAR NOT NULL,
+        industry VARCHAR NOT NULL,
+        contact_email VARCHAR NOT NULL,
+        address VARCHAR NOT NULL
+    )`);
 
     await run(`CREATE TABLE IF NOT EXISTS company_settings (
         company_id VARCHAR PRIMARY KEY,

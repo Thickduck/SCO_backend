@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Backend API for SmartCloud Optimizer",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "nodemon index.js",
     "seed": "node database/seed.js"

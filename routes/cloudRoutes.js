@@ -1,9 +1,10 @@
-const express = require('express');
-const router = express.Router();
-const controller = require('../controllers/cloudController');
+import express from "express"
+import * as controller from "../controllers/cloudController.js"
 
-router.get('/inventory', controller.getInventory);
-router.get('/metrics/:id', controller.getResourceMetrics);
-router.get('/recommendations', controller.getRecommendations);
+const router = express.Router()
 
-module.exports = router;
+router.get("/inventory", controller.getInventory)
+router.get("/metrics/:id", controller.getResourceMetrics)
+router.get("/recommendations", controller.getRecommendations)
+
+export default router

@@ -1,7 +1,7 @@
 import express from "express"
 import cors from "cors"
 import jwt from "jsonwebtoken"
-import { authenticateToken } from "../middleware/middleware.js"
+import { authenticateToken } from "./middleware/middleware.js"
 
 const app = express()
 const port = process.env.PORT || 5001

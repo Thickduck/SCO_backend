@@ -10,14 +10,26 @@ db.serialize(() => {
         email VARCHAR,
         password VARCHAR,
         name VARCHAR,
-        role VARCHAR
+        role VARCHAR,
+        is_admin BOOLEAN DEFAULT FALSE
     )`);
 
     db.run(`INSERT INTO users VALUES 
-        ('usr-1', 'engineer@cloud.com', 'password123', 'Alex (DevOps)', 'engineer'),
-        ('usr-2', 'finance@cloud.com', 'password123', 'Sarah (Finance)', 'finance'),
-        ('usr-3', 'admin@cloud.com', 'password123', 'Leadership', 'leadership')
+        ('usr-1', 'engineer@cloud.com', 'password123', 'Alex (DevOps)', 'engineer', FALSE),
+        ('usr-2', 'finance@cloud.com', 'password123', 'Sarah (Finance)', 'finance', FALSE),
+        ('usr-3', 'admin@cloud.com', 'password123', 'Leadership', 'leadership', TRUE)
     `);
+
+    db.run(`DROP TABLE IF EXISTS company_settings`);
+    db.run(`CREATE TABLE company_settings (
+        company_id VARCHAR PRIMARY KEY,
+        name VARCHAR NOT NULL,
+        website VARCHAR NOT NULL,
+        industry VARCHAR NOT NULL,
+        contact_email VARCHAR NOT NULL,
+        address VARCHAR NOT NULL
+    )`);
+    db.run(`INSERT INTO company_settings VALUES ('default', 'Your Company', '', '', '', '')`);
 
     // 2. Inventory table (VMs, Block Volumes, Public IPs)
     db.run(`DROP TABLE IF EXISTS inventory`);
@@ -44,7 +56,8 @@ db.serialize(() => {
         memory_pct DOUBLE,
         disk_pct DOUBLE,
         network_in_mb DOUBLE,
-        network_out_mb DOUBLE
+        network_out_mb DOUBLE,
+        is_anomaly VARCHAR DEFAULT 'false'
     )`);
 
     // 4. Recommendations table (Rightsizing & Cost Optimization)

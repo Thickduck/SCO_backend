@@ -1,6 +1,6 @@
 import express from "express"
 import * as controller from "../controllers/cloudController.js"
-import { authenticateToken } from "../middleware/middleware.js"
+import { authenticateToken, requireAdmin } from "../middleware/middleware.js"
 
 const router = express.Router()
 
@@ -8,6 +8,9 @@ const router = express.Router()
 router.post("/auth/register", controller.register)
 router.post("/auth/login", controller.login)
 router.get("/auth/me", authenticateToken, controller.getMe)
+router.put("/auth/profile", authenticateToken, controller.updateProfile)
+router.get("/company", authenticateToken, controller.getCompanyDetails)
+router.put("/company", authenticateToken, requireAdmin, controller.updateCompanyDetails)
 
 // Core Resource & Analytics Routes (Protected)
 router.get("/inventory", authenticateToken, controller.getInventory)

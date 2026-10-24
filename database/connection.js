@@ -33,6 +33,116 @@ const run = (sql, ...params) => new Promise((resolve, reject) => {
 const generatedDataDir = path.join(__dirname, '../simulator/generated');
 const sqlString = (value) => `'${value.replaceAll("'", "''")}'`;
 
+async function refreshRecommendations(withinTransaction = false) {
+    if (!withinTransaction) {
+        await run('BEGIN TRANSACTION');
+    }
+    try {
+        await run(`CREATE OR REPLACE TEMP TABLE generated_recommendations AS
+            WITH metric_summary AS (
+            SELECT
+                resource_id,
+                COUNT(*) AS sample_count,
+                MAX(cpu_pct) AS max_cpu,
+                MAX(memory_pct) AS max_memory,
+                quantile_cont(cpu_pct, 0.95) AS p95_cpu,
+                quantile_cont(cpu_pct, 0.99) AS p99_cpu,
+                quantile_cont(memory_pct, 0.95) AS p95_memory,
+                quantile_cont(memory_pct, 0.99) AS p99_memory,
+                MAX(disk_pct) AS max_disk,
+                MAX(iops) AS max_iops,
+                MAX(network_in_mb) AS max_network_in,
+                MAX(network_out_mb) AS max_network_out
+            FROM metrics
+            GROUP BY resource_id
+        ),
+        candidates AS (
+            SELECT
+                'orphan-' || inventory.resource_id AS rec_id,
+                inventory.resource_id,
+                CASE inventory.type
+                    WHEN 'block-volume' THEN 'Remove unattached block volume'
+                    ELSE 'Release unattached public IP'
+                END AS action,
+                'No attachment and zero disk, I/O, and network activity across at least 14 days of recorded metrics.'
+                    AS reason,
+                ROUND(inventory.monthly_cost, 2) AS estimated_monthly_saving,
+                'Safe' AS risk_level
+            FROM inventory
+            JOIN metric_summary USING (resource_id)
+            WHERE inventory.type IN ('block-volume', 'public-ip')
+                AND NULLIF(TRIM(inventory.attached_to), '') IS NULL
+                AND inventory.monthly_cost > 0
+                AND metric_summary.sample_count >= 1344
+                AND metric_summary.max_disk = 0
+                AND metric_summary.max_iops = 0
+                AND metric_summary.max_network_in = 0
+                AND metric_summary.max_network_out = 0
+
+            UNION ALL
+
+            SELECT
+                'rightsize-' || inventory.resource_id AS rec_id,
+                inventory.resource_id,
+                'Review VM for right-sizing' AS action,
+                'Utilization across '
+                    || CAST(metric_summary.sample_count AS VARCHAR)
+                    || ' recorded samples is consistently low (p95 CPU '
+                    || CAST(ROUND(metric_summary.p95_cpu, 1) AS VARCHAR)
+                    || '%, p99 CPU '
+                    || CAST(ROUND(metric_summary.p99_cpu, 1) AS VARCHAR)
+                    || '%, p95 memory '
+                    || CAST(ROUND(metric_summary.p95_memory, 1) AS VARCHAR)
+                    || '%, p99 memory '
+                    || CAST(ROUND(metric_summary.p99_memory, 1) AS VARCHAR)
+                    || '%). Savings estimate is 25% of current monthly cost; validate target capacity and pricing.'
+                    AS reason,
+                ROUND(inventory.monthly_cost * 0.25, 2) AS estimated_monthly_saving,
+                'Low' AS risk_level
+            FROM inventory
+            JOIN metric_summary USING (resource_id)
+            WHERE inventory.type = 'VM'
+                AND metric_summary.sample_count >= 1344
+                AND metric_summary.p95_cpu <= 20
+                AND metric_summary.p99_cpu <= 30
+                AND metric_summary.p95_memory <= 50
+                AND metric_summary.p99_memory <= 60
+                AND metric_summary.max_cpu <= 90
+                AND metric_summary.max_memory <= 90
+            )
+            SELECT
+                candidates.rec_id,
+                candidates.resource_id,
+                candidates.action,
+                candidates.reason,
+                candidates.estimated_monthly_saving,
+                candidates.risk_level,
+                COALESCE(recommendations.status, 'Pending') AS status
+            FROM candidates
+            LEFT JOIN recommendations USING (rec_id)`);
+
+        await run(`DELETE FROM recommendations`);
+        await run(`INSERT INTO recommendations (
+            rec_id, resource_id, action, reason, estimated_monthly_saving, risk_level, status
+        )
+        SELECT rec_id, resource_id, action, reason, estimated_monthly_saving, risk_level, status
+        FROM generated_recommendations`);
+        await run(`DROP TABLE generated_recommendations`);
+        if (!withinTransaction) {
+            await run('COMMIT');
+        }
+    } catch (error) {
+        if (!withinTransaction) {
+            try {
+                await run('ROLLBACK');
+            } catch (rollbackError) {
+                throw new AggregateError([error, rollbackError], 'Recommendation refresh and rollback both failed');
+            }
+        }
+        throw error;
+    }
+}
+
 async function ensureGeneratedDataTables() {
     await run(`CREATE TABLE IF NOT EXISTS inventory (
         resource_id VARCHAR PRIMARY KEY,
@@ -109,6 +219,7 @@ export async function importGeneratedData({ force = false } = {}) {
             `SELECT fingerprint FROM generated_data_imports WHERE dataset_name = 'simulator'`,
         );
         if (previousImport[0]?.fingerprint === fingerprint) {
+            await refreshRecommendations();
             return { imported: false };
         }
     }
@@ -139,6 +250,8 @@ export async function importGeneratedData({ force = false } = {}) {
         SELECT resource_id, CAST(timestamp AS VARCHAR), cpu_pct, memory_pct,
             disk_pct, iops, network_in_mb, network_out_mb, CAST(is_anomaly AS VARCHAR)
         FROM generated_metrics`);
+
+        await refreshRecommendations(true);
 
         await run(`DELETE FROM generated_data_imports WHERE dataset_name = 'simulator'`);
         await run(

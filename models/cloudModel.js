@@ -1,27 +1,63 @@
 import db from '../database/connection.js';
 
+const normalizeRow = (row) => Object.fromEntries(
+  Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? Number(value) : value]),
+);
+
+const queryOne = (sql, params = []) => new Promise((resolve, reject) => {
+  db.all(sql, ...params, (err, rows) => {
+    if (err) reject(err);
+    else resolve(rows[0] && normalizeRow(rows[0]));
+  });
+});
+
 export const CloudModel = {
-  getUserByEmail: (email) => {
-    return new Promise((resolve, reject) => {
-      db.get(`SELECT * FROM users WHERE email = ?`, [email], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  },
+  getUserByEmail: (email) => queryOne(`SELECT * FROM users WHERE email = ?`, [email]),
+  getUserById: (userId) => queryOne(`SELECT * FROM users WHERE user_id = ?`, [userId]),
 
   createUser: (userId, email, password, name, role) => {
     return new Promise((resolve, reject) => {
       db.run(
-        `INSERT INTO users (user_id, email, password, name, role) VALUES (?, ?, ?, ?, ?)`,
-        [userId, email, password, name, role || 'engineer'],
+        `INSERT INTO users (user_id, email, password, name, role, is_admin) VALUES (?, ?, ?, ?, ?, FALSE)`,
+        userId, email, password, name, role || 'engineer',
         function(err) {
           if (err) reject(err);
-          else resolve({ user_id: userId, email, name, role: role || 'engineer' });
+          else resolve({ user_id: userId, email, name, role: role || 'engineer', is_admin: false });
         }
       );
     });
   },
+
+  updateUserProfile: (userId, { name, email, role }) => new Promise((resolve, reject) => {
+    db.all(
+      `UPDATE users SET name = ?, email = ?, role = ? WHERE user_id = ?
+       RETURNING user_id, email, name, role, is_admin`,
+      name, email, role, userId,
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows[0] && normalizeRow(rows[0]));
+      },
+    );
+  }),
+
+  getCompanyDetails: () => queryOne(`
+    SELECT name, website, industry, contact_email, address
+    FROM company_settings WHERE company_id = 'default'
+  `),
+
+  updateCompanyDetails: ({ name, website, industry, contact_email, address }) => new Promise((resolve, reject) => {
+    db.all(
+      `UPDATE company_settings
+       SET name = ?, website = ?, industry = ?, contact_email = ?, address = ?
+       WHERE company_id = 'default'
+       RETURNING name, website, industry, contact_email, address`,
+      name, website, industry, contact_email, address,
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows[0] && normalizeRow(rows[0]));
+      },
+    );
+  }),
 
   getAllInventory: () => {
     return new Promise((resolve, reject) => {
@@ -32,57 +68,36 @@ export const CloudModel = {
     });
   },
 
-  getResourceById: (id) => {
-    return new Promise((resolve, reject) => {
-      db.get(`SELECT * FROM inventory WHERE resource_id = ?`, [id], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  },
+  getResourceById: (id) => queryOne(`SELECT * FROM inventory WHERE resource_id = ?`, [id]),
 
-  getInventoryStats: () => {
-    return new Promise((resolve, reject) => {
-      db.get(`
-        SELECT 
-          COUNT(*) as total_resources,
-          SUM(monthly_cost) as total_monthly_cost,
-          SUM(CASE WHEN type = 'VM' THEN 1 ELSE 0 END) as total_vms,
-          SUM(CASE WHEN type = 'block-volume' THEN 1 ELSE 0 END) as total_volumes,
-          SUM(CASE WHEN type = 'public-ip' THEN 1 ELSE 0 END) as total_ips
-        FROM inventory
-      `, (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  },
+  getInventoryStats: () => queryOne(`
+    SELECT
+      COUNT(*) as total_resources,
+      SUM(monthly_cost) as total_monthly_cost,
+      SUM(CASE WHEN type = 'VM' THEN 1 ELSE 0 END) as total_vms,
+      SUM(CASE WHEN type = 'block-volume' THEN 1 ELSE 0 END) as total_volumes,
+      SUM(CASE WHEN type = 'public-ip' THEN 1 ELSE 0 END) as total_ips
+    FROM inventory
+  `),
 
   getMetricsForResource: (id) => {
     return new Promise((resolve, reject) => {
-      db.all(`SELECT * FROM metrics WHERE resource_id = ? ORDER BY timestamp DESC LIMIT 50`, [id], (err, rows) => {
+      db.all(`SELECT * FROM metrics WHERE resource_id = ? ORDER BY timestamp DESC LIMIT 50`, id, (err, rows) => {
         if (err) reject(err);
         else resolve(rows);
       });
     });
   },
 
-  getResourcePercentiles: (id) => {
-    return new Promise((resolve, reject) => {
-      db.get(`
-        SELECT 
-          quantile_cont(cpu_pct, 0.95) as p95_cpu,
-          quantile_cont(cpu_pct, 0.99) as p99_cpu,
-          quantile_cont(memory_pct, 0.95) as p95_memory,
-          quantile_cont(memory_pct, 0.99) as p99_memory
-        FROM metrics 
-        WHERE resource_id = ?
-      `, [id], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  },
+  getResourcePercentiles: (id) => queryOne(`
+    SELECT
+      quantile_cont(cpu_pct, 0.95) as p95_cpu,
+      quantile_cont(cpu_pct, 0.99) as p99_cpu,
+      quantile_cont(memory_pct, 0.95) as p95_memory,
+      quantile_cont(memory_pct, 0.99) as p99_memory
+    FROM metrics
+    WHERE resource_id = ?
+  `, [id]),
 
   getAnomalies: () => {
     return new Promise((resolve, reject) => {
@@ -106,11 +121,22 @@ export const CloudModel = {
     });
   },
 
+  getRecommendationSavings: (recIds) => {
+    if (!recIds || recIds.length === 0) return Promise.resolve(0);
+    const placeholders = recIds.map(() => '?').join(',');
+    return queryOne(
+      `SELECT COALESCE(SUM(estimated_monthly_saving), 0) as total_savings
+       FROM recommendations
+       WHERE status = 'Pending' AND rec_id IN (${placeholders})`,
+      recIds,
+    ).then((row) => row.total_savings);
+  },
+
   updateRecommendationStatus: (recId, status) => {
     return new Promise((resolve, reject) => {
-      db.run(`UPDATE recommendations SET status = ? WHERE rec_id = ?`, [status, recId], function(err) {
+      db.all(`UPDATE recommendations SET status = ? WHERE rec_id = ? RETURNING rec_id`, status, recId, (err, rows) => {
         if (err) reject(err);
-        else resolve({ updated: this.changes });
+        else resolve({ updated: rows.length });
       });
     });
   },
@@ -121,21 +147,14 @@ export const CloudModel = {
         return resolve({ updated: 0 });
       }
       const placeholders = recIds.map(() => '?').join(',');
-      db.run(`UPDATE recommendations SET status = ? WHERE rec_id IN (${placeholders})`, [status, ...recIds], function(err) {
+      db.all(`UPDATE recommendations SET status = ? WHERE rec_id IN (${placeholders}) RETURNING rec_id`, status, ...recIds, (err, rows) => {
         if (err) reject(err);
-        else resolve({ updated: this.changes });
+        else resolve({ updated: rows.length });
       });
     });
   },
 
-  getCostSummary: () => {
-    return new Promise((resolve, reject) => {
-      db.get(`SELECT SUM(monthly_cost) as total_current_spend FROM inventory`, (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  },
+  getCostSummary: () => queryOne(`SELECT SUM(monthly_cost) as total_current_spend FROM inventory`),
 
   getCostBreakdown: () => {
     return new Promise((resolve, reject) => {
@@ -156,12 +175,8 @@ export const CloudModel = {
     });
   },
 
-  getPotentialSavings: () => {
-    return new Promise((resolve, reject) => {
-      db.get(`SELECT SUM(estimated_monthly_saving) as total_savings FROM recommendations WHERE status = 'Pending'`, (err, row) => {
-        if (err) reject(err);
-        else resolve(row ? row.total_savings || 0 : 0);
-      });
-    });
+  getPotentialSavings: async () => {
+    const row = await queryOne(`SELECT SUM(estimated_monthly_saving) as total_savings FROM recommendations WHERE status = 'Pending'`);
+    return row ? row.total_savings || 0 : 0;
   }
 };

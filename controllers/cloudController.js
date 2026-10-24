@@ -1,6 +1,32 @@
 import jwt from 'jsonwebtoken';
 import { CloudModel } from '../models/cloudModel.js';
 
+const getErrorMessage = (error) => error instanceof Error ? error.message : String(error);
+
+const toPublicUser = (user) => ({
+  id: user.user_id,
+  email: user.email,
+  name: user.name,
+  role: user.role,
+  is_admin: user.is_admin === true,
+});
+
+const createSession = (user) => {
+  const secret = process.env.JWT_SECRET || "fallback_secret";
+  const token = jwt.sign(
+    {
+      sub: user.email,
+      userId: user.user_id,
+      role: user.role,
+      name: user.name,
+      is_admin: user.is_admin === true,
+    },
+    secret,
+    { expiresIn: "8h" }
+  );
+  return { token, user: toPublicUser(user) };
+};
+
 export const register = async (req, res) => {
   try {
     const { email, password, name, role } = req.body ?? {};
@@ -16,29 +42,9 @@ export const register = async (req, res) => {
     const userId = `usr-${Date.now()}`;
     const newUser = await CloudModel.createUser(userId, email, password, name, role);
 
-    const secret = process.env.JWT_SECRET || "fallback_secret";
-    const token = jwt.sign(
-      { 
-        sub: newUser.email, 
-        userId: newUser.user_id, 
-        role: newUser.role, 
-        name: newUser.name 
-      },
-      secret,
-      { expiresIn: "8h" }
-    );
-
-    res.status(201).json({
-      token,
-      user: {
-        id: newUser.user_id,
-        email: newUser.email,
-        name: newUser.name,
-        role: newUser.role
-      }
-    });
+    res.status(201).json(createSession(newUser));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -54,46 +60,98 @@ export const login = async (req, res) => {
       return res.status(401).json({ error: "Invalid email or password" });
     }
 
-    const secret = process.env.JWT_SECRET || "fallback_secret";
-    const token = jwt.sign(
-      { 
-        sub: user.email, 
-        userId: user.user_id, 
-        role: user.role, 
-        name: user.name 
-      },
-      secret,
-      { expiresIn: "8h" }
-    );
-
-    res.json({
-      token,
-      user: {
-        id: user.user_id,
-        email: user.email,
-        name: user.name,
-        role: user.role
-      }
-    });
+    res.json(createSession(user));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
 export const getMe = async (req, res) => {
   try {
-    const user = await CloudModel.getUserByEmail(req.user.sub);
+    const user = req.user.userId
+      ? await CloudModel.getUserById(req.user.userId)
+      : await CloudModel.getUserByEmail(req.user.sub);
     if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({
-      user: {
-        id: user.user_id,
-        email: user.email,
-        name: user.name,
-        role: user.role
-      }
-    });
+    res.json({ user: toPublicUser(user) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
+  }
+};
+
+export const updateProfile = async (req, res) => {
+  try {
+    const { name, email, role } = req.body ?? {};
+    if (
+      typeof name !== "string" || !name.trim() || name.trim().length > 120 ||
+      typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || email.trim().length > 254 ||
+      typeof role !== "string" || !role.trim() || role.trim().length > 120
+    ) {
+      return res.status(400).json({ error: "Provide a valid name, email address, and job description." });
+    }
+
+    const normalizedEmail = email.trim();
+    const existingUser = await CloudModel.getUserByEmail(normalizedEmail);
+    if (existingUser && existingUser.user_id !== req.user.userId) {
+      return res.status(409).json({ error: "An account with this email already exists." });
+    }
+
+    const updatedUser = await CloudModel.updateUserProfile(req.user.userId, {
+      name: name.trim(),
+      email: normalizedEmail,
+      role: role.trim(),
+    });
+    if (!updatedUser) return res.status(404).json({ error: "User not found." });
+    res.json(createSession(updatedUser));
+  } catch (err) {
+    res.status(500).json({ error: getErrorMessage(err) });
+  }
+};
+
+export const getCompanyDetails = async (_req, res) => {
+  try {
+    const company = await CloudModel.getCompanyDetails();
+    if (!company) return res.status(404).json({ error: "Company details have not been configured." });
+    res.json(company);
+  } catch (err) {
+    res.status(500).json({ error: getErrorMessage(err) });
+  }
+};
+
+export const updateCompanyDetails = async (req, res) => {
+  try {
+    const { name, website = "", industry = "", contact_email = "", address = "" } = req.body ?? {};
+    const fields = { name, website, industry, contact_email, address };
+    if (
+      typeof name !== "string" || !name.trim() || name.trim().length > 160 ||
+      typeof website !== "string" || website.length > 255 ||
+      typeof industry !== "string" || industry.length > 120 ||
+      typeof contact_email !== "string" || contact_email.length > 254 ||
+      typeof address !== "string" || address.length > 500 ||
+      (contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact_email.trim()))
+    ) {
+      return res.status(400).json({ error: "Provide valid company details within the allowed field lengths." });
+    }
+    if (website.trim()) {
+      try {
+        const parsedWebsite = new URL(website.trim());
+        if (!["http:", "https:"].includes(parsedWebsite.protocol)) throw new Error("Invalid website protocol");
+      } catch {
+        return res.status(400).json({ error: "Website must be a valid http or https URL." });
+      }
+    }
+
+    const company = await CloudModel.updateCompanyDetails({
+      ...fields,
+      name: name.trim(),
+      website: website.trim(),
+      industry: industry.trim(),
+      contact_email: contact_email.trim(),
+      address: address.trim(),
+    });
+    if (!company) return res.status(404).json({ error: "Company details have not been configured." });
+    res.json(company);
+  } catch (err) {
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -102,7 +160,7 @@ export const getInventory = async (req, res) => {
     const data = await CloudModel.getAllInventory();
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -111,7 +169,7 @@ export const getInventoryStats = async (req, res) => {
     const stats = await CloudModel.getInventoryStats();
     res.json(stats);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -123,7 +181,7 @@ export const getResourceById = async (req, res) => {
     }
     res.json(resource);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -132,7 +190,7 @@ export const getResourceMetrics = async (req, res) => {
     const metrics = await CloudModel.getMetricsForResource(req.params.id);
     res.json(metrics);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -141,7 +199,7 @@ export const getResourcePercentiles = async (req, res) => {
     const percentiles = await CloudModel.getResourcePercentiles(req.params.id);
     res.json(percentiles);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -150,7 +208,7 @@ export const getAnomalies = async (req, res) => {
     const anomalies = await CloudModel.getAnomalies();
     res.json(anomalies);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -159,7 +217,7 @@ export const getRecommendations = async (req, res) => {
     const recs = await CloudModel.getAllRecommendations();
     res.json(recs);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -169,7 +227,7 @@ export const updateRecommendationAction = async (req, res) => {
     const result = await CloudModel.updateRecommendationStatus(req.params.id, status || 'Applied');
     res.json({ success: true, ...result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -178,7 +236,7 @@ export const applyRecommendation = async (req, res) => {
     const result = await CloudModel.updateRecommendationStatus(req.params.id, 'Applied');
     res.json({ success: true, ...result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -187,18 +245,18 @@ export const dismissRecommendation = async (req, res) => {
     const result = await CloudModel.updateRecommendationStatus(req.params.id, 'Dismissed');
     res.json({ success: true, ...result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
 export const batchApplyRecommendations = async (req, res) => {
   try {
     const { rec_ids } = req.body;
+    const savings = await CloudModel.getRecommendationSavings(rec_ids);
     const result = await CloudModel.batchUpdateRecommendations(rec_ids, 'Applied');
-    const savings = await CloudModel.getPotentialSavings();
     res.json({ success: true, applied_count: result.updated, total_estimated_savings: savings });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -207,7 +265,7 @@ export const getCostSummary = async (req, res) => {
     const summary = await CloudModel.getCostSummary();
     res.json(summary);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -216,7 +274,7 @@ export const getCostBreakdown = async (req, res) => {
     const breakdown = await CloudModel.getCostBreakdown();
     res.json(breakdown);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -231,7 +289,7 @@ export const getCostForecast = async (req, res) => {
       forecast_90_days: Math.round(current * 1.10)
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -246,7 +304,7 @@ export const getCostBeforeVsAfter = async (req, res) => {
       projected_monthly_savings: savings
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -261,7 +319,7 @@ export const getAlerts = async (req, res) => {
     }));
     res.json(alerts);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -273,7 +331,7 @@ export const getForecast = async (req, res) => {
       recommendation: "Review auto-scaling policies for dev clusters and terminate orphaned storage volumes."
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -289,7 +347,7 @@ export const runSimulatorWhatIf = async (req, res) => {
       message: "Simulation completed successfully based on active parameters."
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -300,7 +358,7 @@ export const explainAI = async (req, res) => {
       explanation: `AI Cost Analysis for ${resource_id || 'Target Resource'}: Based on metrics (${metrics_summary || 'low utilization'}), this asset is over-provisioned and can be safely rightsized or terminated to reduce monthly burn rate.`
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -324,7 +382,7 @@ export const exportData = async (req, res) => {
       });
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };
 
@@ -336,6 +394,6 @@ export const getSustainability = async (req, res) => {
       energy_saved_kwh: 950.0
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: getErrorMessage(err) });
   }
 };

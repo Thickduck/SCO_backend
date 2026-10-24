@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "duckdb": "^1.0.0",
+    "duckdb": "^1.4.4",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3"
   },

@@ -114,7 +114,7 @@ export const CloudModel = {
 
   getAllRecommendations: () => {
     return new Promise((resolve, reject) => {
-      db.all(`SELECT * FROM recommendations`, (err, rows) => {
+      db.all(`SELECT * FROM recommendations ORDER BY estimated_monthly_saving DESC`, (err, rows) => {
         if (err) reject(err);
         else resolve(rows);
       });

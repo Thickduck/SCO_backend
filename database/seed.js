@@ -1,4 +1,4 @@
-import db from './connection.js';
+import db, { importGeneratedData } from './connection.js';
 
 db.serialize(() => {
     console.log("Setting up database tables...");
@@ -79,8 +79,7 @@ db.serialize(() => {
     const teams = ['Core-Eng', 'Payments', 'Analytics', 'Growth', 'Infra'];
     const vcpuOptions = [2, 4, 8, 16, 32];
     
-    let invStmt = db.prepare(`INSERT INTO inventory VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    let recStmt = db.prepare(`INSERT INTO recommendations VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    let invStmt = db.prepare(`INSERT INTO inventory VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`); 
 
     for (let i = 1; i <= 100; i++) {
         const id = `vm-cluster-${1000 + i}`;
@@ -96,31 +95,28 @@ db.serialize(() => {
 
         invStmt.run(id, name, type, region, env, owner, vcpu, ram, disk, cost, '2025-10-01');
 
-        if (i % 3 === 0 && type === 'VM') {
-            recStmt.run(
-                `rec-${i}`,
-                id,
-                'Resize instance to smaller vCPU tier',
-                'p95 CPU utilization stays below 12% over the last 30 days.',
-                Math.round(cost * 0.4),
-                'Low',
-                'Pending'
-            );
-        } else if (type === 'public-ip' || type === 'block-volume') {
-            recStmt.run(
-                `rec-${i}`,
-                id,
-                'Delete orphaned resource',
-                'Resource has had zero network/disk activity for over 14 days.',
-                Math.round(cost * 0.8),
-                'Safe',
-                'Pending'
-            );
-        }
     }
 
-    invStmt.finalize();
-    recStmt.finalize();
-
-    console.log("Database seeding completed successfully!");
+    invStmt.finalize((inventoryError) => {
+        if (inventoryError) {
+            console.error("Inventory seed finalization failed:", inventoryError);
+            process.exitCode = 1;
+            db.close();
+            return;
+        }
+        void (async () => {
+            try {
+                const result = await importGeneratedData({ force: true });
+                console.log(
+                    `Imported simulator data: ${result.resourceCount} resources and ${result.metricCount} metrics.`,
+                );
+                console.log("Database seeding completed successfully!");
+            } catch (error) {
+                console.error("Generated data import failed:", error);
+                process.exitCode = 1;
+            } finally {
+                db.close();
+            }
+        })();
+    });
 });

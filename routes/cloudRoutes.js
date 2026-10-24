@@ -11,7 +11,31 @@ router.get("/auth/me", authenticateToken, controller.getMe)
 
 // Core Resource & Analytics Routes (Protected)
 router.get("/inventory", authenticateToken, controller.getInventory)
+router.get("/inventory/stats", authenticateToken, controller.getInventoryStats)
+router.get("/resources/:id", authenticateToken, controller.getResourceById)
+router.get("/metrics/anomalies", authenticateToken, controller.getAnomalies)
 router.get("/metrics/:id", authenticateToken, controller.getResourceMetrics)
+router.get("/metrics/:id/percentiles", authenticateToken, controller.getResourcePercentiles)
+
+// Recommendations Routes
 router.get("/recommendations", authenticateToken, controller.getRecommendations)
+router.post("/recommendations/:id/action", authenticateToken, controller.updateRecommendationAction)
+router.post("/recommendations/:id/apply", authenticateToken, controller.applyRecommendation)
+router.post("/recommendations/:id/dismiss", authenticateToken, controller.dismissRecommendation)
+router.post("/recommendations/batch-apply", authenticateToken, controller.batchApplyRecommendations)
+
+// Cost Analysis Routes
+router.get("/costs/summary", authenticateToken, controller.getCostSummary)
+router.get("/costs/breakdown", authenticateToken, controller.getCostBreakdown)
+router.get("/costs/forecast", authenticateToken, controller.getCostForecast)
+router.get("/costs/before-vs-after", authenticateToken, controller.getCostBeforeVsAfter)
+
+// Alerts & Bonus Features Routes
+router.get("/alerts", authenticateToken, controller.getAlerts)
+router.get("/forecast", authenticateToken, controller.getForecast)
+router.post("/simulator/what-if", authenticateToken, controller.runSimulatorWhatIf)
+router.post("/ai/explain", authenticateToken, controller.explainAI)
+router.get("/export/:format", authenticateToken, controller.exportData)
+router.get("/sustainability", authenticateToken, controller.getSustainability)
 
 export default router

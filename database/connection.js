@@ -280,6 +280,24 @@ export async function importGeneratedData({ force = false } = {}) {
 }
 
 export async function initializeDatabase() {
+    await run(`CREATE TABLE IF NOT EXISTS users (
+        user_id VARCHAR PRIMARY KEY,
+        email VARCHAR UNIQUE NOT NULL,
+        password VARCHAR NOT NULL,
+        name VARCHAR NOT NULL,
+        role VARCHAR,
+        is_admin BOOLEAN DEFAULT FALSE
+    )`);
+
+    await run(`CREATE TABLE IF NOT EXISTS company_settings (
+        company_id VARCHAR PRIMARY KEY,
+        name VARCHAR NOT NULL,
+        website VARCHAR NOT NULL,
+        industry VARCHAR NOT NULL,
+        contact_email VARCHAR NOT NULL,
+        address VARCHAR NOT NULL
+    )`);
+
     await run(`CREATE TABLE IF NOT EXISTS company_settings (
         company_id VARCHAR PRIMARY KEY,
         name VARCHAR NOT NULL,
